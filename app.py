@@ -60,23 +60,22 @@ def is_intent(command, keywords):
 
 
 @app.route("/webhook", methods=["POST"])
+@app.route("/", methods=["POST"])
 def webhook():
     body = request.json
     if not body:
-        return jsonify({"error": "empty body"}), 400
+        app.logger.error("Empty body received")
+        return jsonify({"version": "1.0", "response": {"text": "Ошибка: пустой запрос", "end_session": True}}), 400
 
     request_type = body.get("request", {}).get("type", "")
     command = body.get("request", {}).get("command", "").lower().strip()
     is_new_session = body.get("session", {}).get("new", False)
 
-    app.logger.info(f"type={request_type} | command={command} | new={is_new_session}")
+    app.logger.info(f"Request: type={request_type} | command='{command}' | new={is_new_session}")
 
-    if request_type in (
-        "AudioPlayer.PlaybackStarted", "AudioPlayer.PlaybackFinished",
-        "AudioPlayer.PlaybackNearlyFinished", "AudioPlayer.PlaybackFailed",
-        "AudioPlayer.PlaybackStopped"
-    ):
-        return jsonify({"version": "1.0"})
+    # Обработка событий аудио-плеера (Яндекс требует корректный JSON в ответ)
+    if "AudioPlayer." in request_type:
+        return jsonify({"version": "1.0", "response": {"end_session": False}})
 
     if is_new_session:
         return make_response(WELCOME_TEXT, play=True)
