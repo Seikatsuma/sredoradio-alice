@@ -37,7 +37,8 @@ def make_response(text, tts=None, play=False, stop=False, end_session=False):
             "item": {
                 "stream": {
                     "url": STREAM_URL,
-                    "offset_ms": 0
+                    "offset_ms": 0,
+                    "token": "sredoradio-stream-token"
                 },
                 "metadata": {
                     "title": RADIO_NAME,
