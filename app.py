@@ -16,9 +16,9 @@ HELP_TEXT = (
     "Чем могу помочь?"
 )
 
-WELCOME_TEXT = f"Привет! Это навык {RADIO_NAME}. Чтобы начать прослушивание, скажите «включи» или «запусти». Что мне сделать?"
-STOP_TEXT = f"{RADIO_NAME} остановлено. Чтобы вернуться, просто скажите «запусти {RADIO_NAME}». Хорошего дня!"
-UNKNOWN_TEXT = "Я вас не поняла. Скажите «включи», чтобы запустить радио, или «помощь», чтобы узнать все команды."
+WELCOME_TEXT = f"Привет! Это {RADIO_NAME} — радио о силе сообществ. Хотите послушать прямой эфир?"
+STOP_TEXT = f"Выключаю {RADIO_NAME}. Буду ждать вас снова! Хорошего дня!"
+UNKNOWN_TEXT = "Я вас не совсем поняла. Просто скажите «включи», чтобы слушать радио, или «помощь», если нужны подробности."
 
 
 def make_response(text, tts=None, play=False, stop=False, end_session=False):
@@ -79,14 +79,14 @@ def webhook():
         return jsonify({"version": "1.0", "response": {"end_session": False}})
 
     if is_new_session:
-        return make_response(WELCOME_TEXT, play=True)
+        return make_response(WELCOME_TEXT, play=False)
 
     if is_intent(command, ["включи", "запусти", "начни", "старт", "включить",
-                           "запустить", "включай", "играй", "слушать", "слушай"]):
+                           "запустить", "включай", "играй", "слушать", "слушай", "да", "хочу", "давай"]):
         return make_response(f"Запускаю {RADIO_NAME}!", play=True)
 
     if is_intent(command, ["стоп", "выключи", "останови", "хватит", "тихо",
-                           "замолчи", "выключить", "остановить", "пауза"]):
+                           "замолчи", "выключить", "остановить", "пауза", "нет", "не надо"]):
         return make_response(STOP_TEXT, stop=True, end_session=True)
 
     if is_intent(command, ["помощь", "помоги", "что умеешь", "что ты умеешь",
