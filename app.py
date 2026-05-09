@@ -4,7 +4,7 @@ import logging
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-STREAM_URL = "https://listen.radioking.com/radio/734111/stream/800405"
+STREAM_URL = "https://listen10.myradio24.com/5559"
 
 RADIO_NAME = "Средорадио"
 RADIO_SUBTITLE = "Сила Сообществ"
@@ -16,9 +16,9 @@ HELP_TEXT = (
     "Чем могу помочь?"
 )
 
-WELCOME_TEXT = f"Привет! Запускаю {RADIO_NAME}."
-STOP_TEXT = f"{RADIO_NAME} остановлено. Хорошего дня!"
-UNKNOWN_TEXT = "Скажи включи чтобы запустить радио или стоп чтобы остановить."
+WELCOME_TEXT = f"Привет! Это навык {RADIO_NAME}. Чтобы начать прослушивание, скажите «включи» или «запусти». Что мне сделать?"
+STOP_TEXT = f"{RADIO_NAME} остановлено. Чтобы вернуться, просто скажите «запусти {RADIO_NAME}». Хорошего дня!"
+UNKNOWN_TEXT = "Я вас не поняла. Скажите «включи», чтобы запустить радио, или «помощь», чтобы узнать все команды."
 
 
 def make_response(text, tts=None, play=False, stop=False, end_session=False):
