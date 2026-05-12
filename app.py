@@ -1,84 +1,101 @@
-from flask import Flask, request, jsonify, Response
-import requests
+from flask import Flask, request, jsonify
 import logging
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Исходный поток
-RADIO_STREAM_URL = "https://listen10.myradio24.com/5559"
+# Прямая ссылка на поток с добавлением .mp3 для лучшей совместимости
+STREAM_URL = "https://listen10.myradio24.com/5559/stream.mp3"
 
-@app.route("/stream.mp3")
-def stream_proxy():
-    def generate():
-        # Проксируем поток через наш сервер для максимальной совместимости
-        with requests.get(RADIO_STREAM_URL, stream=True) as r:
-            for chunk in r.iter_content(chunk_size=4096):
-                yield chunk
-    return Response(generate(), mimetype="audio/mpeg")
+RADIO_NAME = "Радио Среда"
+RADIO_SUBTITLE = "Сила Сообществ"
 
-def make_response(text, play=False):
-    # Теперь ссылка ведет на наш собственный сервер
-    # Vercel автоматически подставит домен
-    host = request.host_url.rstrip("/")
-    proxy_url = f"{host}/stream.mp3"
-    
-    resp = {
-        "version": "1.0",
-        "response": {
-            "text": text,
-            "tts": text,
-            "end_session": False
-        }
+def make_response(text, play=False, stop=False, has_player=True):
+    response = {
+        "text": text,
+        "tts": text,
+        "end_session": False
     }
+    
     if play:
-        resp["response"]["directives"] = {
-            "audio_player": {
-                "action": "Play",
-                "item": {
-                    "stream": {
-                        "url": proxy_url,
-                        "offset_ms": 0,
-                        "token": "sredo_proxy_v1"
-                    },
-                    "metadata": {
-                        "title": "Радио Среда",
-                        "sub_title": "Прямой эфир"
+        if has_player:
+            response["directives"] = {
+                "audio_player": {
+                    "action": "Play",
+                    "item": {
+                        "stream": {
+                            "url": STREAM_URL,
+                            "offset_ms": 0,
+                            "token": "sredo_v2_direct"
+                        },
+                        "metadata": {
+                            "title": RADIO_NAME,
+                            "sub_title": RADIO_SUBTITLE
+                        }
                     }
                 }
             }
+            response["end_session"] = True
+        else:
+            # Если плеер не поддерживается устройством
+            response["text"] += " К сожалению, ваше устройство не поддерживает воспроизведение аудио через плеер."
+            response["tts"] += " К сожалению, ваше устройство не поддерживает воспроизведение аудио через плеер."
+
+    if stop:
+        response["directives"] = {
+            "audio_player": {
+                "action": "Stop"
+            }
         }
-        resp["response"]["end_session"] = True
-    return jsonify(resp)
+        response["end_session"] = True
+
+    return jsonify({
+        "version": "1.0",
+        "response": response
+    })
 
 @app.route("/webhook", methods=["POST"])
 @app.route("/", methods=["POST"])
 def webhook():
     body = request.json or {}
+    meta = body.get("meta", {})
+    interfaces = meta.get("interfaces", {})
+    has_player = "audio_player" in interfaces
+    
     request_obj = body.get("request", {})
     request_type = request_obj.get("type", "")
     command = request_obj.get("command", "").lower().strip()
+    is_new_session = body.get("session", {}).get("new", False)
+
+    # Логируем наличие плеера
+    app.logger.info(f"Interfaces: {interfaces.keys()}")
 
     if "AudioPlayer." in request_type:
         return jsonify({"version": "1.0", "response": {"end_session": False}})
 
-    if body.get("session", {}).get("new", False) or not command:
-        return make_response("Привет! Это Радио Среда. Хотите послушать прямой эфир?")
+    if is_new_session or not command:
+        welcome = f"Привет! Это {RADIO_NAME}. "
+        if has_player:
+            welcome += "Я могу включить прямой эфир. Сказать «включи»?"
+        else:
+            welcome += "К сожалению, я вижу, что ваше устройство не поддерживает аудио-плеер, поэтому я не смогу запустить радио здесь."
+        return make_response(welcome, has_player=has_player)
 
     if any(word in command for word in ["включи", "запусти", "да", "давай", "играй", "слушать"]):
-        return make_response("Включаю прямой эфир!", play=True)
+        return make_response("Включаю прямой эфир!", play=True, has_player=has_player)
 
-    if any(word in command for word in ["стоп", "выключи", "хватит"]):
-        res = make_response("Выключаю Радио Среда. Хорошего дня!")
-        res.json["response"]["directives"] = {"audio_player": {"action": "Stop"}}
-        res.json["response"]["end_session"] = True
-        return res
+    if any(word in command for word in ["стоп", "выключи", "хватит", "останови"]):
+        return make_response("Выключаю Радио Среда. Хорошего дня!", stop=True)
 
-    return make_response("Я вас не поняла. Просто скажите «включи», чтобы слушать радио.")
+    if any(word in command for word in ["помощь", "что ты умеешь"]):
+        help_text = "Я умею транслировать Радио Среда. Просто скажите «включи», и я запущу поток."
+        return make_response(help_text, has_player=has_player)
+
+    return make_response("Я вас не совсем поняла. Просто скажите «включи», чтобы слушать радио.", has_player=has_player)
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "proxy": "active"})
+    return jsonify({"status": "ok", "player_url": STREAM_URL})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)
