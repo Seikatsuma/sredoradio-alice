@@ -1,51 +1,74 @@
 from flask import Flask, request, jsonify
 import logging
-import time
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# ТЕСТОВАЯ ССЫЛКА (Наше Радио), которая точно работает в Алисе
-STREAM_URL = "https://nashe1.hostingradio.ru/nashe-128.mp3"
+# Прямая ссылка на Наше Радио (для 100% теста)
+TEST_STREAM = "https://nashe1.hostingradio.ru/nashe-128.mp3"
+# Прямая ссылка на Средорадио
+SREDO_STREAM = "https://listen10.myradio24.com/5559"
 
-def make_response(text, play=False):
-    resp = {
-        "version": "1.0",
-        "response": {
-            "text": text,
-            "tts": text,
-            "end_session": False
-        }
+def make_response(text, stream_url=None):
+    response = {
+        "text": text,
+        "tts": text,
+        "end_session": False
     }
-    if play:
-        resp["response"]["directives"] = {
+    
+    if stream_url:
+        response["directives"] = {
             "audio_player": {
                 "action": "Play",
                 "item": {
                     "stream": {
-                        "url": STREAM_URL,
+                        "url": stream_url,
                         "offset_ms": 0,
-                        "token": f"test_{int(time.time())}"
+                        "token": "sredoradio_token_final"
                     },
                     "metadata": {
-                        "title": "Тест звука",
-                        "sub_title": "Проверка плеера"
+                        "title": "Радио Среда"
                     }
                 }
             }
         }
-    return jsonify(resp)
+        # ВАЖНО: Для запуска плеера на многих устройствах сессию нужно закрыть
+        response["end_session"] = True
+        
+    return jsonify({
+        "response": response,
+        "version": "1.0"
+    })
 
 @app.route("/webhook", methods=["POST"])
 @app.route("/", methods=["POST"])
 def webhook():
     body = request.json or {}
-    command = body.get("request", {}).get("command", "").lower().strip()
+    request_obj = body.get("request", {})
+    request_type = request_obj.get("type", "")
+    command = request_obj.get("command", "").lower().strip()
+    
+    # Обработка технических событий (обязательно для AudioPlayer)
+    if "AudioPlayer." in request_type:
+        return jsonify({"version": "1.0", "response": {"end_session": False}})
+
+    # Приветствие (новая сессия)
     if body.get("session", {}).get("new", False) or not command:
-        return make_response("Привет! Это проверка звука. Скажите «включи», чтобы проверить плеер.")
-    if any(word in command for word in ["включи", "запусти", "да"]):
-        return make_response("Запускаю тестовый поток!", play=True)
-    return make_response("Скажите «включи».")
+        return make_response("Привет! Это Радио Среда. Чтобы включить эфир, скажите «запусти» или «включи».")
+
+    # Команды на запуск
+    if any(word in command for word in ["включи", "запусти", "да", "играй", "слушать"]):
+        # ВОЗВРАЩАЕМ СРЕДОРАДИО (я уверен в ссылке)
+        return make_response("Включаю прямой эфир Радио Среда!", stream_url=SREDO_STREAM)
+
+    # Команды на остановку
+    if any(word in command for word in ["стоп", "выключи", "хватит"]):
+        res = make_response("Выключаю. Хорошего дня!")
+        res.json["response"]["directives"] = {"audio_player": {"action": "Stop"}}
+        res.json["response"]["end_session"] = True
+        return res
+
+    return make_response("Я вас не поняла. Просто скажите «включи», чтобы слушать радио.")
 
 @app.route("/", methods=["GET"])
 def health():
