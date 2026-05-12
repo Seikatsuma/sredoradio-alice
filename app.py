@@ -16,23 +16,16 @@ def webhook():
     request_type = request_obj.get("type", "")
     command = request_obj.get("command", "").lower().strip()
 
-    # Если это технический запрос от плеера - отвечаем пустотой
+    # Логируем интерфейсы для отладки
+    app.logger.info(f"Interfaces: {list(interfaces.keys())}")
+    app.logger.info(f"Request Type: {request_type} | Command: {command}")
+
+    # Технические запросы от плеера
     if "AudioPlayer." in request_type:
         return jsonify({"version": "1.0", "response": {"end_session": False}})
 
-    # Проверяем, поддерживает ли устройство плеер
-    has_player = "audio_player" in interfaces
-
     # Приветствие
     if body.get("session", {}).get("new", False) or not command:
-        if not has_player:
-            return jsonify({
-                "version": "1.0",
-                "response": {
-                    "text": "Привет! Это Радио Среда. К сожалению, ваше устройство не поддерживает аудио-плеер. Попробуйте запустить меня на Яндекс Станции.",
-                    "end_session": True
-                }
-            })
         return jsonify({
             "version": "1.0",
             "response": {
@@ -47,8 +40,8 @@ def webhook():
         return jsonify({
             "version": "1.0",
             "response": {
-                "text": "Включаю!",
-                "tts": "Включаю!",
+                "text": "Включаю прямой эфир!",
+                "tts": "Включаю прямой эфир!",
                 "directives": {
                     "audio_player": {
                         "action": "Play",
@@ -56,7 +49,11 @@ def webhook():
                             "stream": {
                                 "url": STREAM_URL,
                                 "offset_ms": 0,
-                                "token": "1"
+                                "token": "sredo_v1"
+                            },
+                            "metadata": {
+                                "title": "Радио Среда",
+                                "sub_title": "Сила Сообществ"
                             }
                         }
                     }
@@ -70,7 +67,7 @@ def webhook():
         return jsonify({
             "version": "1.0",
             "response": {
-                "text": "Выключаю Радио Среда.",
+                "text": "Выключаю Радио Среда. Хорошего дня!",
                 "directives": {
                     "audio_player": {"action": "Stop"}
                 },
