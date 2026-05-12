@@ -27,32 +27,37 @@ def make_response(text, tts=None, play=False, stop=False, end_session=False):
         "response": {
             "text": text,
             "tts": tts or text,
-            "end_session": end_session,
-            "directives": {}
+            "end_session": end_session
         }
     }
+    
     if play:
-        resp["response"]["directives"]["audio_player"] = {
-            "action": "Play",
-            "item": {
-                "stream": {
-                    "url": STREAM_URL,
-                    "offset_ms": 0,
-                    "token": "sredoradio-stream-token"
-                },
-                "metadata": {
-                    "title": RADIO_NAME,
-                    "sub_title": RADIO_SUBTITLE,
-                    "art": {
-                        "sources": [
-                            {"url": "https://link.radioking.com/sredoradio/cover"}
-                        ]
+        resp["response"]["directives"] = {
+            "audio_player": {
+                "action": "Play",
+                "item": {
+                    "stream": {
+                        "url": STREAM_URL,
+                        "offset_ms": 0,
+                        "token": "sredoradio-stream-token"
+                    },
+                    "metadata": {
+                        "title": RADIO_NAME,
+                        "sub_title": RADIO_SUBTITLE,
+                        "art": {
+                            "sources": [
+                                {"url": "https://link.radioking.com/sredoradio/cover"}
+                            ]
+                        }
                     }
                 }
             }
         }
-    if stop:
-        resp["response"]["directives"]["audio_player"] = {"action": "Stop"}
+    elif stop:
+        resp["response"]["directives"] = {
+            "audio_player": {"action": "Stop"}
+        }
+        
     return jsonify(resp)
 
 
@@ -80,6 +85,9 @@ def webhook():
 
     if is_new_session:
         return make_response(WELCOME_TEXT, play=False)
+
+    if not command and not is_new_session:
+         return make_response(WELCOME_TEXT, play=False)
 
     if is_intent(command, ["включи", "запусти", "начни", "старт", "включить",
                            "запустить", "включай", "играй", "слушать", "слушай", "да", "хочу", "давай"]):
