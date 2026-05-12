@@ -1,18 +1,14 @@
 from flask import Flask, request, jsonify
 import logging
 import time
-import random
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Самый прямой адрес потока
-STREAM_URL = "https://listen10.myradio24.com/5559"
+# ТЕСТОВАЯ ССЫЛКА (Наше Радио), которая точно работает в Алисе
+STREAM_URL = "https://nashe1.hostingradio.ru/nashe-128.mp3"
 
 def make_response(text, play=False):
-    # Генерируем абсолютно новый токен для каждой попытки
-    random_token = f"token_{int(time.time())}_{random.randint(1000, 9999)}"
-    
     resp = {
         "version": "1.0",
         "response": {
@@ -21,7 +17,6 @@ def make_response(text, play=False):
             "end_session": False
         }
     }
-    
     if play:
         resp["response"]["directives"] = {
             "audio_player": {
@@ -30,11 +25,11 @@ def make_response(text, play=False):
                     "stream": {
                         "url": STREAM_URL,
                         "offset_ms": 0,
-                        "token": random_token
+                        "token": f"test_{int(time.time())}"
                     },
                     "metadata": {
-                        "title": "Радио Среда",
-                        "sub_title": "Прямой эфир"
+                        "title": "Тест звука",
+                        "sub_title": "Проверка плеера"
                     }
                 }
             }
@@ -45,29 +40,12 @@ def make_response(text, play=False):
 @app.route("/", methods=["POST"])
 def webhook():
     body = request.json or {}
-    request_type = body.get("request", {}).get("type", "")
     command = body.get("request", {}).get("command", "").lower().strip()
-    
-    # Технические ответы для Алисы
-    if "AudioPlayer." in request_type:
-        return jsonify({"version": "1.0", "response": {"end_session": False}})
-
-    # Приветствие
     if body.get("session", {}).get("new", False) or not command:
-        return make_response("Привет! Это Радио Среда. Хотите послушать прямой эфир?")
-
-    # Команды на включение
-    if any(word in command for word in ["включи", "запусти", "да", "давай", "играй", "слушать", "старт"]):
-        return make_response("Включаю Среду!", play=True)
-
-    # Команды на остановку
-    if any(word in command for word in ["стоп", "выключи", "останови", "хватит"]):
-        res = make_response("Выключаю радио. Хорошего дня!")
-        res.json["response"]["directives"] = {"audio_player": {"action": "Stop"}}
-        res.json["response"]["end_session"] = True
-        return res
-
-    return make_response("Я вас не поняла. Просто скажите «включи», чтобы слушать радио.")
+        return make_response("Привет! Это проверка звука. Скажите «включи», чтобы проверить плеер.")
+    if any(word in command for word in ["включи", "запусти", "да"]):
+        return make_response("Запускаю тестовый поток!", play=True)
+    return make_response("Скажите «включи».")
 
 @app.route("/", methods=["GET"])
 def health():
