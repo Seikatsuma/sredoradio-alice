@@ -4,10 +4,8 @@ import logging
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Прямая ссылка на Наше Радио (для 100% теста)
-TEST_STREAM = "https://nashe1.hostingradio.ru/nashe-128.mp3"
-# Прямая ссылка на Средорадио
-SREDO_STREAM = "https://listen10.myradio24.com/5559"
+# Пробуем "чистый" MP3 адрес (добавили /stream.mp3)
+STREAM_URL = "https://listen10.myradio24.com/5559/stream.mp3"
 
 def make_response(text, stream_url=None):
     response = {
@@ -24,15 +22,16 @@ def make_response(text, stream_url=None):
                     "stream": {
                         "url": stream_url,
                         "offset_ms": 0,
-                        "token": "sredoradio_token_final"
+                        "token": "sredo_v5_final"
                     },
                     "metadata": {
-                        "title": "Радио Среда"
+                        "title": "Радио Среда",
+                        "sub_title": "Прямой эфир"
                     }
                 }
             }
         }
-        # ВАЖНО: Для запуска плеера на многих устройствах сессию нужно закрыть
+        # Для колонок ОБЯЗАТЕЛЬНО закрываем сессию при старте плеера
         response["end_session"] = True
         
     return jsonify({
@@ -48,27 +47,30 @@ def webhook():
     request_type = request_obj.get("type", "")
     command = request_obj.get("command", "").lower().strip()
     
-    # Обработка технических событий (обязательно для AudioPlayer)
+    # Логируем ошибки плеера, если они придут от Яндекса
+    if "AudioPlayer.PlaybackFailed" in request_type:
+        app.logger.error(f"PLAYBACK FAILED: {request_obj.get('error', {})}")
+        return jsonify({"version": "1.0", "response": {"end_session": True}})
+
     if "AudioPlayer." in request_type:
         return jsonify({"version": "1.0", "response": {"end_session": False}})
 
-    # Приветствие (новая сессия)
+    # Приветствие
     if body.get("session", {}).get("new", False) or not command:
-        return make_response("Привет! Это Радио Среда. Чтобы включить эфир, скажите «запусти» или «включи».")
+        return make_response("Привет! Это Радио Среда. Чтобы включить эфир, скажите «включи».")
 
-    # Команды на запуск
-    if any(word in command for word in ["включи", "запусти", "да", "играй", "слушать"]):
-        # ВОЗВРАЩАЕМ СРЕДОРАДИО (я уверен в ссылке)
-        return make_response("Включаю прямой эфир Радио Среда!", stream_url=SREDO_STREAM)
+    # Включение
+    if any(word in command for word in ["включи", "запусти", "да", "играй", "слушать", "старт"]):
+        return make_response("Включаю!", stream_url=STREAM_URL)
 
-    # Команды на остановку
-    if any(word in command for word in ["стоп", "выключи", "хватит"]):
-        res = make_response("Выключаю. Хорошего дня!")
+    # Остановка
+    if any(word in command for word in ["стоп", "выключи", "хватит", "останови"]):
+        res = make_response("Выключаю.")
         res.json["response"]["directives"] = {"audio_player": {"action": "Stop"}}
         res.json["response"]["end_session"] = True
         return res
 
-    return make_response("Я вас не поняла. Просто скажите «включи», чтобы слушать радио.")
+    return make_response("Скажите «включи», чтобы слушать радио.")
 
 @app.route("/", methods=["GET"])
 def health():
