@@ -77,28 +77,11 @@ def make_response(text, play=False, stop=False):
     }
 
     if play:
-        # Always send AudioPlayer directive — works on Yandex Station when
-        # the skill has AudioPlayer capability enabled in the Developer Console.
-        # <speaker audio> kept as TTS fallback for non-Station surfaces.
+        # TEST: direct stream URL in <speaker audio>, no redirect, no proxy.
+        # Alice connects straight to the source — rules out redirect/timeout issues.
         response["text"] = "Включаю Радио Среда."
-        response["tts"] = f"<speaker audio='{proxy_url}'>"
+        response["tts"] = f"<speaker audio='{RADIO_STREAM_URL}'>"
         response["end_session"] = True
-        response["directives"] = {
-            "audio_player": {
-                "action": "Play",
-                "item": {
-                    "stream": {
-                        "url": proxy_url,
-                        "offset_ms": 0,
-                        "token": f"sredo_{int(time.time())}",
-                    },
-                    "metadata": {
-                        "title": "Радио Среда",
-                        "sub_title": "Прямой эфир",
-                    },
-                },
-            }
-        }
 
     if stop:
         response["text"] = "Выключаю. До встречи!"
