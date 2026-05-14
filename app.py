@@ -1,16 +1,43 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response, stream_with_context
+import requests
 import logging
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Рабочая ссылка на поток
-STREAM_URL = "https://listen10.myradio24.com/5559"
+# Исходный поток радио
+RADIO_STREAM_URL = "https://listen10.myradio24.com/5559"
 
-RADIO_NAME = "Радио Среда"
-RADIO_SUBTITLE = "Сила Сообществ"
+@app.route("/stream.mp3")
+def stream_proxy():
+    """
+    Прокси-сервер для потока. 
+    Добавляем заголовки, которые любит плеер Алисы (Range, Content-Type).
+    """
+    def generate():
+        # Пересылаем поток чанками
+        with requests.get(RADIO_STREAM_URL, stream=True, timeout=10) as r:
+            for chunk in r.iter_content(chunk_size=8192):
+                yield chunk
 
-def make_response(text, play=False, stop=False, has_player=True):
+    return Response(
+        stream_with_context(generate()),
+        content_type="audio/mpeg",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive"
+        }
+    )
+
+def make_response(text, play=False, stop=False):
+    # Пытаемся отправить директиву В ЛЮБОМ СЛУЧАЕ, игнорируя проверку интерфейсов.
+    # На реальных колонках это может сработать, даже если консоль говорит обратное.
+    
+    # Получаем актуальный хост для ссылки на прокси
+    host = request.host_url.rstrip("/")
+    proxy_url = f"{host}/stream.mp3"
+    
     response = {
         "text": text,
         "tts": text,
@@ -18,29 +45,25 @@ def make_response(text, play=False, stop=False, has_player=True):
     }
     
     if play:
-        if has_player:
-            response["directives"] = {
-                "audio_player": {
-                    "action": "Play",
-                    "item": {
-                        "stream": {
-                            "url": STREAM_URL,
-                            "offset_ms": 0,
-                            "token": "sredo_v3_direct"
-                        },
-                        "metadata": {
-                            "title": RADIO_NAME,
-                            "sub_title": RADIO_SUBTITLE
-                        }
+        # Силовой запуск плеера
+        response["directives"] = {
+            "audio_player": {
+                "action": "Play",
+                "item": {
+                    "stream": {
+                        "url": proxy_url,
+                        "offset_ms": 0,
+                        "token": "sredo_force_v1"
+                    },
+                    "metadata": {
+                        "title": "Радио Среда",
+                        "sub_title": "Сила Сообществ"
                     }
                 }
             }
-            response["end_session"] = True
-        else:
-            # Если плеер не поддерживается устройством
-            msg = " К сожалению, это устройство не поддерживает аудио-плеер. Попробуйте запустить этот навык на Яндекс Станции или в мобильном приложении Яндекс с Алисой."
-            response["text"] += msg
-            response["tts"] += msg
+        }
+        # Для плеера сессия ОБЯЗАТЕЛЬНО должна быть закрыта (True)
+        response["end_session"] = True
 
     if stop:
         response["directives"] = {
@@ -59,41 +82,38 @@ def make_response(text, play=False, stop=False, has_player=True):
 @app.route("/", methods=["POST"])
 def webhook():
     body = request.json or {}
-    meta = body.get("meta", {})
-    interfaces = meta.get("interfaces", {})
-    
-    # Проверяем наличие интерфейса аудио-плеера
-    has_player = "audio_player" in interfaces
-    
     request_obj = body.get("request", {})
     request_type = request_obj.get("type", "")
     command = request_obj.get("command", "").lower().strip()
     is_new_session = body.get("session", {}).get("new", False)
 
-    app.logger.info(f"Request: {request_type} | Has Player: {has_player} | Interfaces: {list(interfaces.keys())}")
+    # Логируем всё для отладки
+    app.logger.info(f"REQ: {request_type} | CMD: {command} | NEW: {is_new_session}")
 
+    # Обработка событий плеера (обязательно для стабильности)
     if "AudioPlayer." in request_type:
         return jsonify({"version": "1.0", "response": {"end_session": False}})
 
     if is_new_session or not command:
-        welcome = f"Привет! Это {RADIO_NAME}. "
-        if has_player:
-            welcome += "Я могу включить прямой эфир. Сказать «включи»?"
-        else:
-            welcome += "Я вижу, что ваше устройство не поддерживает плеер. Чтобы слушать радио, запустите меня на колонке или в приложении Яндекс."
-        return make_response(welcome, has_player=has_player)
+        return make_response("Привет! Это Радио Среда. Я настроила прямой эфир. Сказать «включи»?")
 
     if any(word in command for word in ["включи", "запусти", "да", "давай", "играй", "слушать"]):
-        return make_response("Включаю прямой эфир!", play=True, has_player=has_player)
+        # Мы не проверяем наличие плеера в meta.interfaces, а просто шлем команду.
+        # Если устройство физически может играть — оно заиграет.
+        return make_response("Включаю прямой эфир Радио Среда!", play=True)
 
     if any(word in command for word in ["стоп", "выключи", "хватит", "останови"]):
-        return make_response("Выключаю Радио Среда. Хорошего дня!", stop=True)
+        return make_response("Выключаю радио. До встречи!", stop=True)
 
-    return make_response("Я вас не совсем поняла. Просто скажите «включи», чтобы слушать радио.", has_player=has_player)
+    return make_response("Я вас не поняла. Просто скажите «включи», чтобы слушать радио.")
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "stream": STREAM_URL})
+    return jsonify({
+        "status": "active",
+        "mode": "force_player",
+        "stream_url": f"{request.host_url}stream.mp3"
+    })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)
