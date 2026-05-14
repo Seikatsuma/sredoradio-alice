@@ -2,25 +2,49 @@ from flask import Flask, request, jsonify, Response, stream_with_context
 import requests
 import logging
 import time
+import threading
+import collections
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 RADIO_STREAM_URL = "https://listen10.myradio24.com/5559"
 
+# In-memory ring buffer — последние 50 обращений к /stream.mp3
+_stream_log = collections.deque(maxlen=50)
+_log_lock = threading.Lock()
+
+
+def _log_stream_hit(req):
+    entry = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "ip": req.headers.get("X-Forwarded-For", req.remote_addr),
+        "ua": req.headers.get("User-Agent", "-")[:120],
+        "range": req.headers.get("Range", "-"),
+    }
+    with _log_lock:
+        _stream_log.appendleft(entry)
+    app.logger.info(
+        f"STREAM_HIT ip={entry['ip']} ua={entry['ua'][:60]} range={entry['range']}"
+    )
+
 
 @app.route("/stream.mp3")
 def stream_proxy():
     """
-    Прокси-сервер для потока.
-    Используется для <speaker audio='URL'> в TTS — добавляет заголовки Accept-Ranges
-    и Content-Type: audio/mpeg, которые требует Яндекс.
+    Прокси для живого стрима.
+    Используется как fallback в <speaker audio='URL'>.
+    Каждое обращение логируется в /stream-log.
     """
-    range_header = request.headers.get("Range", None)
+    _log_stream_hit(request)
+
+    range_header = request.headers.get("Range")
     headers = {"Range": range_header} if range_header else {}
 
     def generate():
-        with requests.get(RADIO_STREAM_URL, stream=True, timeout=30, headers=headers) as r:
+        with requests.get(
+            RADIO_STREAM_URL, stream=True, timeout=30, headers=headers
+        ) as r:
             for chunk in r.iter_content(chunk_size=8192):
                 if chunk:
                     yield chunk
@@ -36,6 +60,14 @@ def stream_proxy():
     )
 
 
+@app.route("/stream-log")
+def stream_log():
+    """Последние обращения к /stream.mp3 — для автономной проверки."""
+    with _log_lock:
+        entries = list(_stream_log)
+    return jsonify({"hits": len(entries), "log": entries})
+
+
 def make_response(text, play=False, stop=False, has_audio_player=False):
     host = request.host_url.rstrip("/")
     proxy_url = f"{host}/stream.mp3"
@@ -48,38 +80,34 @@ def make_response(text, play=False, stop=False, has_audio_player=False):
     }
 
     if play:
-        if has_audio_player:
-            # Устройство поддерживает AudioPlayer — используем прямой URL потока
-            # (НЕ прокси, чтобы избежать serverless timeout Vercel)
-            response["directives"] = {
-                "audio_player": {
-                    "action": "Play",
-                    "item": {
-                        "stream": {
-                            "url": RADIO_STREAM_URL,
-                            "offset_ms": 0,
-                            "token": token,
-                        },
-                        "metadata": {
-                            "title": "Радио Среда",
-                            "sub_title": "Прямой эфир",
-                        },
+        # ── Стратегия A: AudioPlayer (Яндекс Станция, Яндекс-приложение) ────
+        # Форсируем директиву независимо от meta.interfaces.audio_player.
+        # Устройства без AudioPlayer просто проигнорируют директиву и
+        # воспроизведут TTS (стратегия Б).
+        response["directives"] = {
+            "audio_player": {
+                "action": "Play",
+                "item": {
+                    "stream": {
+                        "url": RADIO_STREAM_URL,  # прямой URL, без Vercel-прокси
+                        "offset_ms": 0,
+                        "token": token,
                     },
-                }
+                    "metadata": {
+                        "title": "Радио Среда",
+                        "sub_title": "Прямой эфир",
+                    },
+                },
             }
-            response["end_session"] = True  # AudioPlayer требует закрытой сессии
-        else:
-            # Вариант Б: <speaker audio> — TTS-инъекция аудио.
-            # Яндекс забирает поток с нашего прокси и воспроизводит его.
-            # Для живого стрима Яндекс может играть непрерывно (поведение не задокументировано).
-            # end_session=False позволяет перезапустить, когда Алиса спросит "Вы здесь?"
-            response["tts"] = f"<speaker audio='{proxy_url}'>"
-            response["text"] = "Радио Среда — прямой эфир."
-            response["end_session"] = False
+        }
+        response["end_session"] = True  # AudioPlayer требует end_session=True
+
+        # ── Стратегия Б: <speaker audio> в TTS (веб-интерфейс, др. поверхности) ─
+        response["tts"] = f"<speaker audio='{proxy_url}'>"
+        response["text"] = "Включаю Радио Среда."
 
     if stop:
-        if has_audio_player:
-            response["directives"] = {"audio_player": {"action": "Stop"}}
+        response["directives"] = {"audio_player": {"action": "Stop"}}
         response["text"] = "Выключаю радио. До встречи!"
         response["tts"] = "Выключаю радио. До встречи!"
         response["end_session"] = True
@@ -103,9 +131,9 @@ def webhook():
         f"TYPE={request_type} | CMD={command!r} | NEW={is_new_session} | AP={has_audio_player}"
     )
 
-    # События плеера — при PlaybackFinished перезапускаем поток
+    # ── AudioPlayer события ──────────────────────────────────────────────────
     if request_type == "AudioPlayer.PlaybackFinished":
-        app.logger.info("Stream ended — restarting")
+        app.logger.info("PlaybackFinished — restarting stream")
         return make_response("Перезапускаю эфир.", play=True, has_audio_player=True)
 
     if request_type in (
@@ -115,15 +143,18 @@ def webhook():
     ):
         return jsonify({"version": "1.0", "response": {"end_session": False}})
 
-    # Новая сессия
+    # ── Новая сессия ─────────────────────────────────────────────────────────
     if is_new_session:
         return make_response(
             "Привет! Это Радио Среда — прямой эфир. Скажите «включи», чтобы начать слушать.",
             has_audio_player=has_audio_player,
         )
 
-    # Команда включить
-    PLAY_WORDS = ["включи", "запусти", "давай", "да", "играй", "слушать", "включить", "начни", "старт"]
+    # ── Команды ──────────────────────────────────────────────────────────────
+    PLAY_WORDS = [
+        "включи", "запусти", "давай", "да", "играй", "слушать",
+        "включить", "начни", "старт", "play",
+    ]
     if any(w in command for w in PLAY_WORDS) or any(w in original for w in PLAY_WORDS):
         return make_response(
             "Включаю прямой эфир Радио Среда!",
@@ -131,14 +162,13 @@ def webhook():
             has_audio_player=has_audio_player,
         )
 
-    # Команда выключить
-    STOP_WORDS = ["стоп", "выключи", "хватит", "останови", "тихо", "замолчи"]
+    STOP_WORDS = ["стоп", "выключи", "хватит", "останови", "тихо", "замолчи", "stop"]
     if any(w in command for w in STOP_WORDS) or any(w in original for w in STOP_WORDS):
         return make_response(
             "Выключаю.", stop=True, has_audio_player=has_audio_player
         )
 
-    # Пустая команда = Алиса спросила "Вы здесь?" после окончания аудио → перезапускаем
+    # Пустая команда → Алиса спросила "Вы здесь?" → перезапускаем
     if not command:
         return make_response(
             "Продолжаю эфир.",
@@ -154,14 +184,17 @@ def webhook():
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify(
-        {
-            "status": "ok",
-            "mode": "tts_speaker_injection",
-            "stream_direct": RADIO_STREAM_URL,
-            "stream_proxy": f"{request.host_url}stream.mp3",
-        }
-    )
+    with _log_lock:
+        hits = len(_stream_log)
+        last = list(_stream_log)[:3]
+    return jsonify({
+        "status": "ok",
+        "mode": "audioplayer_force + speaker_fallback",
+        "stream_direct": RADIO_STREAM_URL,
+        "stream_proxy": f"{request.host_url}stream.mp3",
+        "stream_log_hits": hits,
+        "last_hits": last,
+    })
 
 
 if __name__ == "__main__":
