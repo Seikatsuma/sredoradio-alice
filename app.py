@@ -105,11 +105,11 @@ def make_response(text, play=False, stop=False):
     }
 
     if play:
-        # Variant B: <speaker audio> with infinite stream.
-        # We pass the proxy URL (not direct) so every connection is logged.
-        # end_session=True closes the dialogue session; audio player keeps going.
+        # Variant B: <speaker audio> with infinite live stream.
+        # Use direct stream URL to avoid Vercel function timeout (10s on free tier).
+        # The proxy URL is kept for AudioPlayer future use + manual testing.
         response["text"] = "Включаю Радио Среда."
-        response["tts"] = f"<speaker audio='{proxy_url}'>"
+        response["tts"] = f"<speaker audio='{RADIO_STREAM_URL}'>"
         response["end_session"] = True
 
     if stop:
