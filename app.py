@@ -77,12 +77,28 @@ def make_response(text, play=False, stop=False):
     }
 
     if play:
-        # Variant B: <speaker audio> with redirect-proxy URL.
-        # /stream.mp3 has .mp3 extension (Alice SSML accepts it), then 302-redirects
-        # to the live source so there's no Vercel function timeout on the audio data.
+        # Always send AudioPlayer directive — works on Yandex Station when
+        # the skill has AudioPlayer capability enabled in the Developer Console.
+        # <speaker audio> kept as TTS fallback for non-Station surfaces.
         response["text"] = "Включаю Радио Среда."
         response["tts"] = f"<speaker audio='{proxy_url}'>"
         response["end_session"] = True
+        response["directives"] = {
+            "audio_player": {
+                "action": "Play",
+                "item": {
+                    "stream": {
+                        "url": proxy_url,
+                        "offset_ms": 0,
+                        "token": f"sredo_{int(time.time())}",
+                    },
+                    "metadata": {
+                        "title": "Радио Среда",
+                        "sub_title": "Прямой эфир",
+                    },
+                },
+            }
+        }
 
     if stop:
         response["text"] = "Выключаю. До встречи!"
