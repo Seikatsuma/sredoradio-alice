@@ -49,42 +49,14 @@ def _log_hit(req, source="proxy"):
 @app.route("/stream.mp3")
 def stream_proxy():
     """
-    Infinite live-stream proxy with ICY headers.
-    Used as <speaker audio> URL — no Content-Length so Alice treats it as live.
-    Also serves AudioPlayer if Yandex ever unblocks it for this skill.
+    Redirect to the live stream source.
+    - URL has .mp3 extension → Alice's SSML parser accepts it
+    - 302 redirect → Alice connects directly to the source, no Vercel timeout
+    - We still log the hit before redirecting
     """
+    from flask import redirect as flask_redirect
     _log_hit(request, source="proxy")
-
-    def generate():
-        with requests.get(
-            RADIO_STREAM_URL,
-            stream=True,
-            timeout=None,
-            headers={
-                "Icy-MetaData": "1",
-                "User-Agent": "Mozilla/5.0 AliceRadioProxy/1.0",
-            },
-        ) as r:
-            for chunk in r.iter_content(chunk_size=4096):
-                if chunk:
-                    yield chunk
-
-    return Response(
-        stream_with_context(generate()),
-        status=200,
-        content_type="audio/mpeg",
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Connection": "keep-alive",
-            "Transfer-Encoding": "chunked",
-            "X-Accel-Buffering": "no",
-            "icy-name": "Радио Среда",
-            "icy-genre": "Talk",
-            "icy-pub": "1",
-            "icy-br": "128",
-        },
-    )
+    return flask_redirect(RADIO_STREAM_URL, code=302)
 
 
 @app.route("/stream-log")
@@ -105,11 +77,11 @@ def make_response(text, play=False, stop=False):
     }
 
     if play:
-        # Variant B: <speaker audio> with infinite live stream.
-        # Use direct stream URL to avoid Vercel function timeout (10s on free tier).
-        # The proxy URL is kept for AudioPlayer future use + manual testing.
+        # Variant B: <speaker audio> with redirect-proxy URL.
+        # /stream.mp3 has .mp3 extension (Alice SSML accepts it), then 302-redirects
+        # to the live source so there's no Vercel function timeout on the audio data.
         response["text"] = "Включаю Радио Среда."
-        response["tts"] = f"<speaker audio='{RADIO_STREAM_URL}'>"
+        response["tts"] = f"<speaker audio='{proxy_url}'>"
         response["end_session"] = True
 
     if stop:
