@@ -9,10 +9,26 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 RADIO_STREAM_URL = "https://listen10.myradio24.com/5559"
+NTFY_TOPIC = "sredoradio-alice-stream"
 
-# In-memory ring buffer — последние 50 обращений к /stream.mp3
+# In-memory ring buffer (last 50 hits within the same serverless instance).
+# NOTE: resets on every cold start — use ntfy.sh for cross-invocation monitoring.
 _stream_log = collections.deque(maxlen=50)
 _log_lock = threading.Lock()
+
+
+def _ping_ntfy(ip, ua, range_hdr):
+    """Fire-and-forget POST to ntfy.sh for persistent cross-invocation logging."""
+    try:
+        msg = f"ip={ip} ua={ua[:60]} range={range_hdr}"
+        requests.post(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data=msg.encode("utf-8"),
+            headers={"Title": "Stream hit", "Priority": "low"},
+            timeout=3,
+        )
+    except Exception:
+        pass
 
 
 def _log_stream_hit(req):
@@ -27,14 +43,19 @@ def _log_stream_hit(req):
     app.logger.info(
         f"STREAM_HIT ip={entry['ip']} ua={entry['ua'][:60]} range={entry['range']}"
     )
+    threading.Thread(
+        target=_ping_ntfy,
+        args=(entry["ip"], entry["ua"], entry["range"]),
+        daemon=True,
+    ).start()
 
 
 @app.route("/stream.mp3")
 def stream_proxy():
     """
-    Прокси для живого стрима.
-    Используется как fallback в <speaker audio='URL'>.
-    Каждое обращение логируется в /stream-log.
+    Proxy for the live stream.
+    Used as the AudioPlayer stream URL so every device connection is logged.
+    Also used as <speaker audio> fallback for non-AudioPlayer surfaces.
     """
     _log_stream_hit(request)
 
@@ -62,7 +83,7 @@ def stream_proxy():
 
 @app.route("/stream-log")
 def stream_log():
-    """Последние обращения к /stream.mp3 — для автономной проверки."""
+    """Last hits to /stream.mp3 within this serverless instance."""
     with _log_lock:
         entries = list(_stream_log)
     return jsonify({"hits": len(entries), "log": entries})
@@ -80,16 +101,14 @@ def make_response(text, play=False, stop=False, has_audio_player=False):
     }
 
     if play:
-        # ── Стратегия A: AudioPlayer (Яндекс Станция, Яндекс-приложение) ────
-        # Форсируем директиву независимо от meta.interfaces.audio_player.
-        # Устройства без AudioPlayer просто проигнорируют директиву и
-        # воспроизведут TTS (стратегия Б).
+        # AudioPlayer.Play directive — Yandex Station follows this.
+        # We use the Vercel proxy URL so every Station connection is logged via ntfy.sh.
         response["directives"] = {
             "audio_player": {
                 "action": "Play",
                 "item": {
                     "stream": {
-                        "url": RADIO_STREAM_URL,  # прямой URL, без Vercel-прокси
+                        "url": proxy_url,
                         "offset_ms": 0,
                         "token": token,
                     },
@@ -100,9 +119,9 @@ def make_response(text, play=False, stop=False, has_audio_player=False):
                 },
             }
         }
-        response["end_session"] = True  # AudioPlayer требует end_session=True
+        response["end_session"] = True
 
-        # ── Стратегия Б: <speaker audio> в TTS (веб-интерфейс, др. поверхности) ─
+        # <speaker audio> fallback for web/non-AudioPlayer surfaces.
         response["tts"] = f"<speaker audio='{proxy_url}'>"
         response["text"] = "Включаю Радио Среда."
 
@@ -131,26 +150,30 @@ def webhook():
         f"TYPE={request_type} | CMD={command!r} | NEW={is_new_session} | AP={has_audio_player}"
     )
 
-    # ── AudioPlayer события ──────────────────────────────────────────────────
+    # ── AudioPlayer events ───────────────────────────────────────────────────
     if request_type == "AudioPlayer.PlaybackFinished":
         app.logger.info("PlaybackFinished — restarting stream")
         return make_response("Перезапускаю эфир.", play=True, has_audio_player=True)
 
+    # NearlyFinished: queue the next play so Station connects seamlessly.
+    if request_type == "AudioPlayer.PlaybackNearlyFinished":
+        app.logger.info("PlaybackNearlyFinished — queuing next stream")
+        return make_response("Продолжаю эфир.", play=True, has_audio_player=True)
+
     if request_type in (
-        "AudioPlayer.PlaybackNearlyFinished",
         "AudioPlayer.PlaybackFailed",
         "AudioPlayer.PlaybackStopped",
     ):
         return jsonify({"version": "1.0", "response": {"end_session": False}})
 
-    # ── Новая сессия ─────────────────────────────────────────────────────────
+    # ── New session ──────────────────────────────────────────────────────────
     if is_new_session:
         return make_response(
             "Привет! Это Радио Среда — прямой эфир. Скажите «включи», чтобы начать слушать.",
             has_audio_player=has_audio_player,
         )
 
-    # ── Команды ──────────────────────────────────────────────────────────────
+    # ── Commands ─────────────────────────────────────────────────────────────
     PLAY_WORDS = [
         "включи", "запусти", "давай", "да", "играй", "слушать",
         "включить", "начни", "старт", "play",
@@ -168,7 +191,7 @@ def webhook():
             "Выключаю.", stop=True, has_audio_player=has_audio_player
         )
 
-    # Пустая команда → Алиса спросила "Вы здесь?" → перезапускаем
+    # Empty command → Alice is asking "Are you there?" → keep playing
     if not command:
         return make_response(
             "Продолжаю эфир.",
@@ -189,9 +212,10 @@ def health():
         last = list(_stream_log)[:3]
     return jsonify({
         "status": "ok",
-        "mode": "audioplayer_force + speaker_fallback",
+        "mode": "audioplayer_proxy + speaker_fallback + ntfy_monitor",
         "stream_direct": RADIO_STREAM_URL,
         "stream_proxy": f"{request.host_url}stream.mp3",
+        "ntfy_monitor": f"https://ntfy.sh/{NTFY_TOPIC}",
         "stream_log_hits": hits,
         "last_hits": last,
     })
